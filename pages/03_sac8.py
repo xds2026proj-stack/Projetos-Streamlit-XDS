@@ -702,6 +702,7 @@ with aba_objs[1]:
 
         colunas_editaveis = [
             "Motorista",
+            "Carga",
             "Status",
             "Ocorrência",
             "Responsavel_Ocorrencia",
