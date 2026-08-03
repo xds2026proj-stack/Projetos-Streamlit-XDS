@@ -510,6 +510,7 @@ abas_lista = [
 if tem_acesso_financeiro:
     abas_lista.append("💳 Homologação de Adicionais")
     abas_lista.append("📄 Faturamento (Contas a Pagar / Receber)")
+    abas_lista.append("💰 Controladoria & DRE")
 
 aba_objs = st.tabs(abas_lista)
 
