@@ -38,6 +38,7 @@ COLUNAS_OPERACIONAIS = [
     "Periodo de entrega",
     "Nome do Recebedor",
     "CEP", "Bairro",
+    "Custo Diesel",
 ]
 
 COLUNAS_FINANCEIRAS = [
