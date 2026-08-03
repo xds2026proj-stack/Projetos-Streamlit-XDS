@@ -709,6 +709,7 @@ with aba_objs[1]:
             "Observações",
             "Adicional_Receber",
             "Adicional_Pagar",
+            "Custo Diesel",
         ]
 
         df_editado = st.data_editor(
