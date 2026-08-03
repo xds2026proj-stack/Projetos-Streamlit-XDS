@@ -575,7 +575,7 @@ with aba_objs[1]:
                 "Avaria",
                 "Atraso",
                 "Cliente Ausente",
-                "Local de difícil acesso"
+                "Local de difícil acesso",
                 "Devolução",
                 "Endereço Não Localizado",
             ]
