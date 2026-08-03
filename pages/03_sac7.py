@@ -127,7 +127,7 @@ def realizar_login():
     if not st.session_state.autenticado:
         c1, c2, c3 = st.columns([1, 2, 1])
         with c2:
-            st.markdown("## 🔐 Torre de Controle Logística")
+            st.markdown("## 🔐 XDS | Torre de Controle Logística")
             with st.form("login_form"):
                 usuario = st.text_input("Usuário")
                 senha = st.text_input("Senha", type="password")

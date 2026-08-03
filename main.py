@@ -1,5 +1,5 @@
 def main():
-    print("Hello from projetos-streamlit-xds!")
+    print("Hello from XDS!")
 
 
 if __name__ == "__main__":
