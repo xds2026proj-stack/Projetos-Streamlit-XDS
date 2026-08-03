@@ -399,7 +399,7 @@ if st.sidebar.button("🚪 Sair", use_container_width=True):
 # -----------------------------------------------------------------------------
 # 7. FILTROS DE CONSULTA
 # -----------------------------------------------------------------------------
-st.title("🚚 Torre de Controle Logística")
+st.title("🚚 Torre de Controle XDS Logística")
 
 with st.container(border=True):
     st.markdown("### 🔍 Filtros de Pesquisa e Intervalo")
