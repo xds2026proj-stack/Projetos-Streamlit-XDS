@@ -1120,3 +1120,71 @@ if tem_acesso_financeiro:
                     st.cache_data.clear()
                 except Exception as e:
                     st.error(f"Erro ao salvar faturamento: {e}")
+
+    # --- ABA 6: CONTROLADORIA & DRE ---
+        with aba_objs[5]:
+            st.markdown(
+                "#### 💰 Resultado Financeiro Consolidado & Status de Adicionais"
+            )
+    
+            df_calc = (
+                df_filtrado.groupby("Carga")
+                .agg({
+                    "Frete_Receber": "first",
+                    "Frete_Pagar": "first",
+                    "Custo_Diesel": "first",
+                    "Adicional_Receber": "sum",
+                    "Status_Adicional_Receber": "first",
+                    "Adicional_Pagar": "sum",
+                    "Status_Adicional_Pagar": "first",
+                })
+                .reset_index()
+            )
+    
+            rec_frete = df_calc["Frete_Receber"].sum()
+            pag_frete = df_calc["Frete_Pagar"].sum()
+            c_diesel = df_calc["Custo_Diesel"].sum()
+    
+            # Adicionais Receber (Aprovados vs Pendentes)
+            rec_adic_aprovado = df_calc[
+                df_calc["Status_Adicional_Receber"] == "Aprovado"
+            ]["Adicional_Receber"].sum()
+            rec_adic_pendente = df_calc[
+                df_calc["Status_Adicional_Receber"] == "Pendente"
+            ]["Adicional_Receber"].sum()
+    
+            # Adicionais Pagar (Aprovados vs Pendentes)
+            pag_adic_aprovado = df_calc[
+                df_calc["Status_Adicional_Pagar"] == "Aprovado"
+            ]["Adicional_Pagar"].sum()
+            pag_adic_pendente = df_calc[
+                df_calc["Status_Adicional_Pagar"] == "Pendente"
+            ]["Adicional_Pagar"].sum()
+    
+            f_total_receber = rec_frete + rec_adic_aprovado
+            f_total_custos = pag_frete + pag_adic_aprovado + c_diesel
+            margem_liquida = f_total_receber - f_total_custos
+    
+            st.markdown("##### 🟢 Resumo Geral DRE (Valores Homologados)")
+            m1, m2, m3, m4 = st.columns(4)
+            criar_card_kpi(m1, "Faturado Efetivo", f"R$ {f_total_receber:,.2f}")
+            criar_card_kpi(m2, "Custos Efetivos", f"R$ {f_total_custos:,.2f}")
+            criar_card_kpi(m3, "Margem Bruta (R$)", f"R$ {margem_liquida:,.2f}")
+            criar_card_kpi(m4, "Consumo Diesel", f"R$ {c_diesel:,.2f}")
+    
+            st.divider()
+    
+            st.markdown("##### 🟡 Acompanhamento de Adicionais (Pipeline)")
+            a1, a2, a3, a4 = st.columns(4)
+            criar_card_kpi(
+                a1, "Adic. Receber (Aprovado)", f"R$ {rec_adic_aprovado:,.2f}"
+            )
+            criar_card_kpi(
+                a2, "Adic. Receber (Pendente)", f"R$ {rec_adic_pendente:,.2f}"
+            )
+            criar_card_kpi(
+                a3, "Adic. Pagar (Aprovado)", f"R$ {pag_adic_aprovado:,.2f}"
+            )
+            criar_card_kpi(
+                a4, "Adic. Pagar (Pendente)", f"R$ {pag_adic_pendente:,.2f}"
+            )
