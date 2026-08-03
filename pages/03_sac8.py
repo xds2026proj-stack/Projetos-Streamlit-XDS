@@ -34,10 +34,6 @@ COLUNAS_OPERACIONAIS = [
     "Ocorrência",
     "Responsavel_Ocorrencia",
     "Observações",
-    "Local",
-    "Periodo de entrega",
-    "Nome do Recebedor",
-    "CEP", "Bairro",
 ]
 
 COLUNAS_FINANCEIRAS = [
@@ -52,6 +48,11 @@ COLUNAS_FINANCEIRAS = [
     "Status_Faturamento_Receber",
     "Fatura_Pagar_ID",
     "Status_Faturamento_Pagar",
+]
+
+COLUNAS_AUDITORIA_LINHA = [
+    "Ultima_Alteracao_Data",
+    "Ultima_Alteracao_Usuario",
 ]
 
 # -----------------------------------------------------------------------------
@@ -93,37 +94,167 @@ TEMAS = {
 if "tema_selecionado" not in st.session_state:
     st.session_state.tema_selecionado = "🔴 Vermelho Corporativo"
 
+
 # -----------------------------------------------------------------------------
-# 3. CONTROLE DE ACESSO
+# 3. CONEXÃO E CARREGAMENTO DE DADOS (PLANILHA)
 # -----------------------------------------------------------------------------
-USUARIOS = {
-    "admin": {
-        "senha": "123",
-        "nome": "Gestor XDS",
-        "perfil": "Admin",
-        "acesso_financeiro": True,
-    },
-    "operador": {
-        "senha": "123",
-        "nome": "Operador Logístico",
-        "perfil": "Operador",
-        "acesso_financeiro": False,
-    },
-    "financeiro": {
-        "senha": "123",
-        "nome": "Analista Financeiro",
-        "perfil": "Financeiro",
-        "acesso_financeiro": True,
-    },
-    "user": {
-        "senha": "123",
-        "nome": "Consulta / Cliente",
-        "perfil": "Leitor",
-        "acesso_financeiro": False,
-    },
-}
+def obter_cliente_gspread():
+    credentials = dict(st.secrets["connections"]["gsheets"])
+    return gspread.service_account_from_dict(credentials)
 
 
+@st.cache_data(ttl=60)
+def carregar_usuarios():
+    try:
+        gc = obter_cliente_gspread()
+        sh = gc.open_by_url(URL_PLANILHA)
+        ws_usuarios = sh.worksheet("Usuarios")
+        dados = ws_usuarios.get_all_records()
+        df_usr = pd.DataFrame(dados)
+
+        usuarios_dict = {}
+        for _, row in df_usr.iterrows():
+            u = str(row.get("Usuario", "")).strip()
+            if u:
+                acesso_fin = str(row.get("Acesso_Financeiro", "FALSE")).upper() in ["TRUE", "1", "VERDADEIRO"]
+                usuarios_dict[u] = {
+                    "senha": str(row.get("Senha", "")).strip(),
+                    "nome": str(row.get("Nome", u)),
+                    "perfil": str(row.get("Perfil", "Leitor")),
+                    "acesso_financeiro": acesso_fin,
+                }
+        return usuarios_dict
+    except Exception as e:
+        st.warning(f"Não foi possível carregar a aba 'Usuarios'. Utilizando usuários padrão temporários. Erro: {e}")
+        return {
+            "admin": {"senha": "123", "nome": "Gestor XDS", "perfil": "Admin", "acesso_financeiro": True},
+            "operador": {"senha": "123", "nome": "Operador Logístico", "perfil": "Operador", "acesso_financeiro": False},
+        }
+
+
+@st.cache_data(ttl=60)
+def carregar_dados():
+    gc = obter_cliente_gspread()
+    sh = gc.open_by_url(URL_PLANILHA)
+
+    ws_entregas = sh.get_worksheet(0)
+    dados_entregas = ws_entregas.get_all_records()
+    df_entregas = pd.DataFrame(dados_entregas)
+
+    colunas_necessarias = (
+        COLUNAS_OPERACIONAIS + COLUNAS_FINANCEIRAS + ["Data_Envio"] + COLUNAS_AUDITORIA_LINHA
+    )
+    for col in colunas_necessarias:
+        if col not in df_entregas.columns:
+            if col in [
+                "Frete_Receber",
+                "Adicional_Receber",
+                "Frete_Pagar",
+                "Adicional_Pagar",
+                "Custo_Diesel",
+            ]:
+                df_entregas[col] = 0.0
+            elif col in [
+                "Status_Adicional_Receber",
+                "Status_Adicional_Pagar",
+            ]:
+                df_entregas[col] = "Pendente"
+            elif col in [
+                "Status_Faturamento_Receber",
+                "Status_Faturamento_Pagar",
+            ]:
+                df_entregas[col] = "A Faturar"
+            elif col in ["Fatura_Receber_ID", "Fatura_Pagar_ID", "Ultima_Alteracao_Usuario"]:
+                df_entregas[col] = ""
+            elif col == "Data_Envio":
+                df_entregas[col] = datetime.date.today().strftime("%Y-%m-%d")
+            elif col == "Ultima_Alteracao_Data":
+                df_entregas[col] = ""
+            else:
+                df_entregas[col] = ""
+
+    cols_numericas = [
+        "Frete_Receber",
+        "Adicional_Receber",
+        "Frete_Pagar",
+        "Adicional_Pagar",
+        "Custo_Diesel",
+    ]
+    for col in cols_numericas:
+        df_entregas[col] = (
+            pd.to_numeric(
+                df_entregas[col].astype(str).str.replace(",", "."),
+                errors="coerce",
+            )
+            .fillna(0.0)
+            .astype(float)
+        )
+
+    df_entregas["Data_Envio_dt"] = pd.to_datetime(
+        df_entregas["Data_Envio"], errors="coerce"
+    )
+
+    motoristas_ativos = ["Manter Atual / Não Alterar", "Não Atribuído"]
+    try:
+        ws_motoristas = sh.worksheet("Motoristas")
+        df_mot = pd.DataFrame(ws_motoristas.get_all_records())
+        if "Status" in df_mot.columns:
+            df_mot = df_mot[
+                df_mot["Status"].astype(str).str.upper() == "ATIVO"
+            ]
+        if "Nome" in df_mot.columns:
+            motoristas_ativos += df_mot["Nome"].tolist()
+    except Exception:
+        motoristas_ativos += ["João", "Carlos", "Ana", "Roberto"]
+
+    return df_entregas, motoristas_ativos
+
+
+try:
+    USUARIOS = carregar_usuarios()
+    df_raw, lista_motoristas = carregar_dados()
+except Exception as e:
+    st.error(f"Erro ao conectar com a planilha: {e}")
+    st.stop()
+
+
+def registrar_log_auditoria(acao, detalhes):
+    """Registra uma entrada na aba Logs da planilha."""
+    try:
+        gc = obter_cliente_gspread()
+        sh = gc.open_by_url(URL_PLANILHA)
+        try:
+            ws_logs = sh.worksheet("Logs")
+        except Exception:
+            ws_logs = sh.add_worksheet(title="Logs", rows="1000", cols="4")
+            ws_logs.append_row(["Data_Hora", "Usuario", "Acao", "Detalhes"])
+
+        agora = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        usuario_log = st.session_state.get("usuario_logado", {}).get("nome", "Desconhecido")
+        ws_logs.append_row([agora, usuario_log, acao, detalhes])
+    except Exception as e:
+        st.warning(f"Não foi possível salvar o log de auditoria: {e}")
+
+
+def salvar_dados_na_planilha(df_para_salvar):
+    gc = obter_cliente_gspread()
+    sh = gc.open_by_url(URL_PLANILHA)
+    worksheet = sh.get_worksheet(0)
+
+    df_gravar = df_para_salvar.copy()
+    if "Data_Envio_dt" in df_gravar.columns:
+        df_gravar = df_gravar.drop(columns=["Data_Envio_dt"])
+
+    df_limpo = df_gravar.fillna("").astype(str)
+    matriz = [df_limpo.columns.tolist()] + df_limpo.values.tolist()
+
+    worksheet.clear()
+    worksheet.update(matriz)
+
+
+# -----------------------------------------------------------------------------
+# 4. SISTEMA DE LOGIN E CONTROLE DE ACESSO
+# -----------------------------------------------------------------------------
 def realizar_login():
     if "autenticado" not in st.session_state:
         st.session_state.autenticado = False
@@ -154,8 +285,27 @@ def realizar_login():
 if not realizar_login():
     st.stop()
 
+# PERMISSÕES DE PERFIL
+usuario_atual = st.session_state.usuario_logado
+tem_acesso_financeiro = usuario_atual.get("acesso_financeiro", False)
+
+if tem_acesso_financeiro:
+    colunas_permitidas = [
+        c
+        for c in df_raw.columns
+        if c in COLUNAS_OPERACIONAIS + COLUNAS_FINANCEIRAS + COLUNAS_AUDITORIA_LINHA or c == "Data_Envio"
+    ]
+else:
+    colunas_permitidas = [
+        c
+        for c in df_raw.columns
+        if c
+        in COLUNAS_OPERACIONAIS
+        + ["Adicional_Receber", "Adicional_Pagar", "Data_Envio"] + COLUNAS_AUDITORIA_LINHA
+    ]
+
 # -----------------------------------------------------------------------------
-# 4. ESTILO CUSTOMIZADO
+# 5. ESTILO CUSTOMIZADO
 # -----------------------------------------------------------------------------
 cor_tema = TEMAS[st.session_state.tema_selecionado]
 
@@ -208,133 +358,6 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
-
-
-# -----------------------------------------------------------------------------
-# 5. CARREGAMENTO E SALVAMENTO DE DADOS
-# -----------------------------------------------------------------------------
-def obter_cliente_gspread():
-    credentials = dict(st.secrets["connections"]["gsheets"])
-    return gspread.service_account_from_dict(credentials)
-
-
-@st.cache_data(ttl=60)
-def carregar_dados():
-    gc = obter_cliente_gspread()
-    sh = gc.open_by_url(URL_PLANILHA)
-
-    ws_entregas = sh.get_worksheet(0)
-    dados_entregas = ws_entregas.get_all_records()
-    df_entregas = pd.DataFrame(dados_entregas)
-
-    colunas_necessarias = (
-        COLUNAS_OPERACIONAIS + COLUNAS_FINANCEIRAS + ["Data_Envio"]
-    )
-    for col in colunas_necessarias:
-        if col not in df_entregas.columns:
-            if col in [
-                "Frete_Receber",
-                "Adicional_Receber",
-                "Frete_Pagar",
-                "Adicional_Pagar",
-                "Custo_Diesel",
-            ]:
-                df_entregas[col] = 0.0
-            elif col in [
-                "Status_Adicional_Receber",
-                "Status_Adicional_Pagar",
-            ]:
-                df_entregas[col] = "Pendente"
-            elif col in [
-                "Status_Faturamento_Receber",
-                "Status_Faturamento_Pagar",
-            ]:
-                df_entregas[col] = "A Faturar"
-            elif col in ["Fatura_Receber_ID", "Fatura_Pagar_ID"]:
-                df_entregas[col] = ""
-            elif col == "Data_Envio":
-                df_entregas[col] = datetime.date.today().strftime("%Y-%m-%d")
-            else:
-                df_entregas[col] = ""
-
-    cols_numericas = [
-        "Frete_Receber",
-        "Adicional_Receber",
-        "Frete_Pagar",
-        "Adicional_Pagar",
-        "Custo_Diesel",
-    ]
-    for col in cols_numericas:
-        df_entregas[col] = (
-            pd.to_numeric(
-                df_entregas[col].astype(str).str.replace(",", "."),
-                errors="coerce",
-            )
-            .fillna(0.0)
-            .astype(float)
-        )
-
-    df_entregas["Data_Envio_dt"] = pd.to_datetime(
-        df_entregas["Data_Envio"], errors="coerce"
-    )
-
-    motoristas_ativos = ["Manter Atual / Não Alterar", "Não Atribuído"]
-    try:
-        ws_motoristas = sh.worksheet("Motoristas")
-        df_mot = pd.DataFrame(ws_motoristas.get_all_records())
-        if "Status" in df_mot.columns:
-            df_mot = df_mot[
-                df_mot["Status"].astype(str).str.upper() == "ATIVO"
-            ]
-        if "Nome" in df_mot.columns:
-            motoristas_ativos += df_mot["Nome"].tolist()
-    except Exception:
-        motoristas_ativos += ["João", "Carlos", "Ana", "Roberto"]
-
-    return df_entregas, motoristas_ativos
-
-
-try:
-    df_raw, lista_motoristas = carregar_dados()
-except Exception as e:
-    st.error(f"Erro ao conectar com a planilha: {e}")
-    st.stop()
-
-
-def salvar_dados_na_planilha(df_para_salvar):
-    gc = obter_cliente_gspread()
-    sh = gc.open_by_url(URL_PLANILHA)
-    worksheet = sh.get_worksheet(0)
-
-    df_gravar = df_para_salvar.copy()
-    if "Data_Envio_dt" in df_gravar.columns:
-        df_gravar = df_gravar.drop(columns=["Data_Envio_dt"])
-
-    df_limpo = df_gravar.fillna("").astype(str)
-    matriz = [df_limpo.columns.tolist()] + df_limpo.values.tolist()
-
-    worksheet.clear()
-    worksheet.update(matriz)
-
-
-# PERMISSÕES DE PERFIL
-usuario_atual = st.session_state.usuario_logado
-tem_acesso_financeiro = usuario_atual.get("acesso_financeiro", False)
-
-if tem_acesso_financeiro:
-    colunas_permitidas = [
-        c
-        for c in df_raw.columns
-        if c in COLUNAS_OPERACIONAIS + COLUNAS_FINANCEIRAS or c == "Data_Envio"
-    ]
-else:
-    colunas_permitidas = [
-        c
-        for c in df_raw.columns
-        if c
-        in COLUNAS_OPERACIONAIS
-        + ["Adicional_Receber", "Adicional_Pagar", "Data_Envio"]
-    ]
 
 # -----------------------------------------------------------------------------
 # 6. SIDEBAR
@@ -482,7 +505,6 @@ abas_lista = [
 if tem_acesso_financeiro:
     abas_lista.append("💳 Homologação de Adicionais")
     abas_lista.append("📄 Faturamento (Contas a Pagar / Receber)")
-    abas_lista.append("💰 Controladoria & DRE")
 
 aba_objs = st.tabs(abas_lista)
 
@@ -593,6 +615,9 @@ with aba_objs[1]:
                     else:
                         indices_alvo = df_filtrado.index
 
+                    agora_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    usr_nome = usuario_atual["nome"]
+
                     if novo_mot != "Manter Atual / Não Alterar":
                         df_raw.loc[indices_alvo, "Motorista"] = novo_mot
                     if novo_status != "Manter Atual / Não Alterar":
@@ -605,9 +630,17 @@ with aba_objs[1]:
                             else nova_resp
                         )
 
+                    # Atualiza colunas de auditoria na linha
+                    df_raw.loc[indices_alvo, "Ultima_Alteracao_Data"] = agora_str
+                    df_raw.loc[indices_alvo, "Ultima_Alteracao_Usuario"] = usr_nome
+
                     try:
-                        with st.spinner("Gravando alterações na nuvem..."):
+                        with st.spinner("Gravando alterações e logs na nuvem..."):
                             salvar_dados_na_planilha(df_raw)
+                            registrar_log_auditoria(
+                                "Alteração em Lote",
+                                f"Registros atualizados: {len(indices_alvo)}. Status: {novo_status}, Mot: {novo_mot}, Oc: {nova_ocorrencia}"
+                            )
 
                         st.success(
                             f"✅ {len(indices_alvo)} pedido(s) atualizado(s) com sucesso!"
@@ -662,9 +695,7 @@ with aba_objs[1]:
 
         df_para_editar = df_filtrado[colunas_permitidas].copy()
 
-        # Ajuste: Libera Responsavel_Ocorrencia para ser editado manualmente!
         colunas_editaveis = [
-            "Carga",
             "Motorista",
             "Status",
             "Ocorrência",
@@ -689,9 +720,11 @@ with aba_objs[1]:
 
         if st.button("💾 Salvar Edição na Nuvem", type="primary"):
             try:
+                agora_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                usr_nome = usuario_atual["nome"]
+
                 with st.spinner("Atualizando planilha na nuvem..."):
                     for idx in df_editado.index:
-                        # Preenchimento automático da responsabilidade se deixado em branco
                         oc_val = df_editado.loc[idx, "Ocorrência"]
                         resp_val = df_editado.loc[idx, "Responsavel_Ocorrencia"]
 
@@ -700,31 +733,35 @@ with aba_objs[1]:
                                 RESPONSABILIDADE_PADRAO.get(oc_val, "N/A")
                             )
 
-                        # Controle de status de aprovação de adicionais
                         if "Adicional_Receber" in df_editado.columns:
                             if (
                                 str(df_raw.loc[idx, "Adicional_Receber"])
                                 != str(df_editado.loc[idx, "Adicional_Receber"])
                             ):
-                                df_raw.loc[idx, "Status_Adicional_Receber"] = (
-                                    "Pendente"
-                                )
+                                df_raw.loc[idx, "Status_Adicional_Receber"] = "Pendente"
+
                         if "Adicional_Pagar" in df_editado.columns:
                             if (
                                 str(df_raw.loc[idx, "Adicional_Pagar"])
                                 != str(df_editado.loc[idx, "Adicional_Pagar"])
                             ):
-                                df_raw.loc[idx, "Status_Adicional_Pagar"] = (
-                                    "Pendente"
-                                )
+                                df_raw.loc[idx, "Status_Adicional_Pagar"] = "Pendente"
+
+                        # Atualiza auditoria da linha
+                        df_raw.loc[idx, "Ultima_Alteracao_Data"] = agora_str
+                        df_raw.loc[idx, "Ultima_Alteracao_Usuario"] = usr_nome
 
                     df_raw.loc[df_editado.index, df_editado.columns] = (
                         df_editado.values
                     )
                     salvar_dados_na_planilha(df_raw)
+                    registrar_log_auditoria(
+                        "Edição Fina",
+                        f"Edição de dados em {len(df_editado)} linha(s) pela tabela operacional."
+                    )
 
                 st.success(
-                    "✅ Tabela gravada na nuvem com sucesso! As alterações foram registradas."
+                    "✅ Tabela e histórico gravados na nuvem com sucesso!"
                 )
                 st.cache_data.clear()
 
@@ -760,7 +797,7 @@ with aba_objs[2]:
         st.bar_chart(df_filtrado["Ocorrência"].value_counts())
 
 # -----------------------------------------------------------------------------
-# ABA 4, 5 & 6: MÓDULOS FINANCEIROS E FATURAMENTO
+# ABA 4 & 5: MÓDULOS FINANCEIROS E FATURAMENTO
 # -----------------------------------------------------------------------------
 if tem_acesso_financeiro:
 
@@ -771,7 +808,6 @@ if tem_acesso_financeiro:
             "Aprove ou rejeite os adicionais informados pela equipe operacional antes de liberá-los para faturamento."
         )
 
-        # Agregação CORRETA: Soma dos adicionais de TODAS as linhas da Carga
         df_cargas_fin = (
             df_raw.groupby("Carga")
             .agg({
@@ -779,10 +815,10 @@ if tem_acesso_financeiro:
                 "Motorista": "first",
                 "Status": "first",
                 "Frete_Receber": "first",
-                "Adicional_Receber": "sum",  # Soma todas as entregas!
+                "Adicional_Receber": "sum",
                 "Status_Adicional_Receber": "first",
                 "Frete_Pagar": "first",
-                "Adicional_Pagar": "sum",  # Soma todas as entregas!
+                "Adicional_Pagar": "sum",
                 "Status_Adicional_Pagar": "first",
                 "Custo_Diesel": "first",
             })
@@ -835,21 +871,27 @@ if tem_acesso_financeiro:
             "💾 Homologar e Salvar Lançamentos Financeiros", type="primary"
         ):
             try:
+                agora_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                usr_nome = usuario_atual["nome"]
+
                 with st.spinner("Atualizando validações na nuvem..."):
                     for _, row in df_fin_editado.iterrows():
                         carga_id = row["Carga"]
                         mask = df_raw["Carga"].astype(str) == str(carga_id)
                         df_raw.loc[mask, "Frete_Receber"] = row["Frete_Receber"]
-                        df_raw.loc[mask, "Status_Adicional_Receber"] = row[
-                            "Status_Adicional_Receber"
-                        ]
+                        df_raw.loc[mask, "Status_Adicional_Receber"] = row["Status_Adicional_Receber"]
                         df_raw.loc[mask, "Frete_Pagar"] = row["Frete_Pagar"]
-                        df_raw.loc[mask, "Status_Adicional_Pagar"] = row[
-                            "Status_Adicional_Pagar"
-                        ]
+                        df_raw.loc[mask, "Status_Adicional_Pagar"] = row["Status_Adicional_Pagar"]
                         df_raw.loc[mask, "Custo_Diesel"] = row["Custo_Diesel"]
+                        
+                        df_raw.loc[mask, "Ultima_Alteracao_Data"] = agora_str
+                        df_raw.loc[mask, "Ultima_Alteracao_Usuario"] = usr_nome
 
                     salvar_dados_na_planilha(df_raw)
+                    registrar_log_auditoria(
+                        "Homologação Financeira",
+                        f"Validações financeiras atualizadas pelo usuário {usr_nome}."
+                    )
 
                 st.success("✅ Validações atualizadas com sucesso!")
                 st.cache_data.clear()
@@ -879,7 +921,6 @@ if tem_acesso_financeiro:
         ]
 
         with tab_fat_rec:
-            # Agregação com SOMA nos adicionais
             df_fat_rec = (
                 df_filtrado.groupby("Carga")
                 .agg({
@@ -898,7 +939,6 @@ if tem_acesso_financeiro:
                 * (df_fat_rec["Status_Adicional_Receber"] == "Aprovado")
             )
 
-            # CARDS DE VISÃO GERAL DE FATURAMENTO (RECEBER)
             tot_rec_geral = df_fat_rec["Total_Receber"].sum()
             tot_rec_pago = df_fat_rec[
                 df_fat_rec["Status_Faturamento_Receber"] == "Pago / Recebido"
@@ -927,16 +967,24 @@ if tem_acesso_financeiro:
                     "Cliente_XDS": st.column_config.TextColumn(
                         "Cliente_XDS", disabled=True
                     ),
+                    "Frete_Receber": st.column_config.NumberColumn(
+                        "Frete Base (R$)", format="R$ %.2f", disabled=True
+                    ),
+                    "Adicional_Receber": st.column_config.NumberColumn(
+                        "Adicional (R$)", format="R$ %.2f", disabled=True
+                    ),
+                    "Status_Adicional_Receber": st.column_config.TextColumn(
+                        "Status Adicional", disabled=True
+                    ),
                     "Total_Receber": st.column_config.NumberColumn(
-                        "Valor Total Aprovado (R$)",
-                        format="R$ %.2f",
-                        disabled=True,
+                        "Total a Receber (R$)", format="R$ %.2f", disabled=True
                     ),
                     "Fatura_Receber_ID": st.column_config.TextColumn(
-                        "Nº da Fatura / ND"
+                        "Nº Fatura / ND"
                     ),
                     "Status_Faturamento_Receber": st.column_config.SelectboxColumn(
-                        "Status do Faturamento", options=status_faturamento_op
+                        "Status Faturamento",
+                        options=status_faturamento_op,
                     ),
                 },
                 hide_index=True,
@@ -944,31 +992,32 @@ if tem_acesso_financeiro:
                 key="editor_faturamento_receber",
             )
 
-            if st.button(
-                "💾 Salvar Status de Faturamento (Receber)", type="primary"
-            ):
+            if st.button("💾 Atualizar Faturamento a Receber", type="primary"):
                 try:
-                    with st.spinner("Atualizando faturas a receber..."):
+                    agora_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    usr_nome = usuario_atual["nome"]
+
+                    with st.spinner("Atualizando faturas na nuvem..."):
                         for _, row in df_edit_fat_rec.iterrows():
                             carga_id = row["Carga"]
                             mask = df_raw["Carga"].astype(str) == str(carga_id)
-                            df_raw.loc[mask, "Fatura_Receber_ID"] = row[
-                                "Fatura_Receber_ID"
-                            ]
-                            df_raw.loc[
-                                mask, "Status_Faturamento_Receber"
-                            ] = row["Status_Faturamento_Receber"]
+                            df_raw.loc[mask, "Fatura_Receber_ID"] = row["Fatura_Receber_ID"]
+                            df_raw.loc[mask, "Status_Faturamento_Receber"] = row["Status_Faturamento_Receber"]
+                            df_raw.loc[mask, "Ultima_Alteracao_Data"] = agora_str
+                            df_raw.loc[mask, "Ultima_Alteracao_Usuario"] = usr_nome
 
                         salvar_dados_na_planilha(df_raw)
+                        registrar_log_auditoria(
+                            "Atualização de Faturamento (Receber)",
+                            "Alteração nos status ou números de faturas de contas a receber."
+                        )
 
-                    st.success("✅ Faturas a Receber salvas com sucesso!")
+                    st.success("✅ Faturamento a receber atualizado com sucesso!")
                     st.cache_data.clear()
-
                 except Exception as e:
-                    st.error(f"Erro ao salvar Faturas a Receber: {e}")
+                    st.error(f"Erro ao salvar faturamento: {e}")
 
         with tab_fat_pag:
-            # Agregação com SOMA nos adicionais
             df_fat_pag = (
                 df_filtrado.groupby("Carga")
                 .agg({
@@ -987,22 +1036,21 @@ if tem_acesso_financeiro:
                 * (df_fat_pag["Status_Adicional_Pagar"] == "Aprovado")
             )
 
-            # CARDS DE VISÃO GERAL DE FATURAMENTO (PAGAR)
             tot_pag_geral = df_fat_pag["Total_Pagar"].sum()
             tot_pag_pago = df_fat_pag[
                 df_fat_pag["Status_Faturamento_Pagar"] == "Pago / Recebido"
             ]["Total_Pagar"].sum()
             tot_pag_pendente = tot_pag_geral - tot_pag_pago
 
-            fp_k1, fp_k2, fp_k3 = st.columns(3)
+            p_k1, p_k2, p_k3 = st.columns(3)
             criar_card_kpi(
-                fp_k1, "Total a Pagar (Período)", f"R$ {tot_pag_geral:,.2f}"
+                p_k1, "Total do Período", f"R$ {tot_pag_geral:,.2f}"
             )
             criar_card_kpi(
-                fp_k2, "Já Pago / Quitado", f"R$ {tot_pag_pago:,.2f}"
+                p_k2, "Já Pago", f"R$ {tot_pag_pago:,.2f}"
             )
             criar_card_kpi(
-                fp_k3, "Pendente de Pagamento", f"R$ {tot_pag_pendente:,.2f}"
+                p_k3, "Pendente de Pagamento", f"R$ {tot_pag_pendente:,.2f}"
             )
 
             st.divider()
@@ -1014,18 +1062,26 @@ if tem_acesso_financeiro:
                         "Carga / Manifesto", disabled=True
                     ),
                     "Motorista": st.column_config.TextColumn(
-                        "Motorista", disabled=True
+                        "Motorista / Terceiro", disabled=True
+                    ),
+                    "Frete_Pagar": st.column_config.NumberColumn(
+                        "Frete Base (R$)", format="R$ %.2f", disabled=True
+                    ),
+                    "Adicional_Pagar": st.column_config.NumberColumn(
+                        "Adicional (R$)", format="R$ %.2f", disabled=True
+                    ),
+                    "Status_Adicional_Pagar": st.column_config.TextColumn(
+                        "Status Adicional", disabled=True
                     ),
                     "Total_Pagar": st.column_config.NumberColumn(
-                        "Valor Total Aprovado (R$)",
-                        format="R$ %.2f",
-                        disabled=True,
+                        "Total a Pagar (R$)", format="R$ %.2f", disabled=True
                     ),
                     "Fatura_Pagar_ID": st.column_config.TextColumn(
-                        "Nº Recibo / Fatura"
+                        "Nº CTH / Fatura"
                     ),
                     "Status_Faturamento_Pagar": st.column_config.SelectboxColumn(
-                        "Status do Pagamento", options=status_faturamento_op
+                        "Status Pagamento",
+                        options=status_faturamento_op,
                     ),
                 },
                 hide_index=True,
@@ -1033,93 +1089,27 @@ if tem_acesso_financeiro:
                 key="editor_faturamento_pagar",
             )
 
-            if st.button(
-                "💾 Salvar Status de Pagamentos (Pagar)", type="primary"
-            ):
+            if st.button("💾 Atualizar Faturamento a Pagar", type="primary"):
                 try:
-                    with st.spinner("Atualizando pagamentos..."):
+                    agora_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    usr_nome = usuario_atual["nome"]
+
+                    with st.spinner("Atualizando faturas na nuvem..."):
                         for _, row in df_edit_fat_pag.iterrows():
                             carga_id = row["Carga"]
                             mask = df_raw["Carga"].astype(str) == str(carga_id)
-                            df_raw.loc[mask, "Fatura_Pagar_ID"] = row[
-                                "Fatura_Pagar_ID"
-                            ]
-                            df_raw.loc[mask, "Status_Faturamento_Pagar"] = row[
-                                "Status_Faturamento_Pagar"
-                            ]
+                            df_raw.loc[mask, "Fatura_Pagar_ID"] = row["Fatura_Pagar_ID"]
+                            df_raw.loc[mask, "Status_Faturamento_Pagar"] = row["Status_Faturamento_Pagar"]
+                            df_raw.loc[mask, "Ultima_Alteracao_Data"] = agora_str
+                            df_raw.loc[mask, "Ultima_Alteracao_Usuario"] = usr_nome
 
                         salvar_dados_na_planilha(df_raw)
+                        registrar_log_auditoria(
+                            "Atualização de Faturamento (Pagar)",
+                            "Alteração nos status ou números de faturas de contas a pagar."
+                        )
 
-                    st.success("✅ Pagamentos atualizados com sucesso!")
+                    st.success("✅ Faturamento a pagar atualizado com sucesso!")
                     st.cache_data.clear()
-
                 except Exception as e:
-                    st.error(f"Erro ao salvar Faturas a Pagar: {e}")
-
-    # --- ABA 6: CONTROLADORIA & DRE ---
-    with aba_objs[5]:
-        st.markdown(
-            "#### 💰 Resultado Financeiro Consolidado & Status de Adicionais"
-        )
-
-        df_calc = (
-            df_filtrado.groupby("Carga")
-            .agg({
-                "Frete_Receber": "first",
-                "Frete_Pagar": "first",
-                "Custo_Diesel": "first",
-                "Adicional_Receber": "sum",
-                "Status_Adicional_Receber": "first",
-                "Adicional_Pagar": "sum",
-                "Status_Adicional_Pagar": "first",
-            })
-            .reset_index()
-        )
-
-        rec_frete = df_calc["Frete_Receber"].sum()
-        pag_frete = df_calc["Frete_Pagar"].sum()
-        c_diesel = df_calc["Custo_Diesel"].sum()
-
-        # Adicionais Receber (Aprovados vs Pendentes)
-        rec_adic_aprovado = df_calc[
-            df_calc["Status_Adicional_Receber"] == "Aprovado"
-        ]["Adicional_Receber"].sum()
-        rec_adic_pendente = df_calc[
-            df_calc["Status_Adicional_Receber"] == "Pendente"
-        ]["Adicional_Receber"].sum()
-
-        # Adicionais Pagar (Aprovados vs Pendentes)
-        pag_adic_aprovado = df_calc[
-            df_calc["Status_Adicional_Pagar"] == "Aprovado"
-        ]["Adicional_Pagar"].sum()
-        pag_adic_pendente = df_calc[
-            df_calc["Status_Adicional_Pagar"] == "Pendente"
-        ]["Adicional_Pagar"].sum()
-
-        f_total_receber = rec_frete + rec_adic_aprovado
-        f_total_custos = pag_frete + pag_adic_aprovado + c_diesel
-        margem_liquida = f_total_receber - f_total_custos
-
-        st.markdown("##### 🟢 Resumo Geral DRE (Valores Homologados)")
-        m1, m2, m3, m4 = st.columns(4)
-        criar_card_kpi(m1, "Faturado Efetivo", f"R$ {f_total_receber:,.2f}")
-        criar_card_kpi(m2, "Custos Efetivos", f"R$ {f_total_custos:,.2f}")
-        criar_card_kpi(m3, "Margem Bruta (R$)", f"R$ {margem_liquida:,.2f}")
-        criar_card_kpi(m4, "Consumo Diesel", f"R$ {c_diesel:,.2f}")
-
-        st.divider()
-
-        st.markdown("##### 🟡 Acompanhamento de Adicionais (Pipeline)")
-        a1, a2, a3, a4 = st.columns(4)
-        criar_card_kpi(
-            a1, "Adic. Receber (Aprovado)", f"R$ {rec_adic_aprovado:,.2f}"
-        )
-        criar_card_kpi(
-            a2, "Adic. Receber (Pendente)", f"R$ {rec_adic_pendente:,.2f}"
-        )
-        criar_card_kpi(
-            a3, "Adic. Pagar (Aprovado)", f"R$ {pag_adic_aprovado:,.2f}"
-        )
-        criar_card_kpi(
-            a4, "Adic. Pagar (Pendente)", f"R$ {pag_adic_pendente:,.2f}"
-        )
+                    st.error(f"Erro ao salvar faturamento: {e}")

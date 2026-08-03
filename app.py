@@ -36,11 +36,11 @@ def save_preferences(prefs):
 prefs = load_preferences()
 
 # Título principal
-st.title("🚀 Bem-vindo ao Meu Projeto Streamlit")
+st.title("🚀 Bem-vindo a Torre de Controle XDS")
 
 st.markdown("""
-Este é o ponto de entrada da sua aplicação Streamlit.
-Você pode organizar suas páginas na pasta `pages/`.
+Este é o ponto de entrada para o controle XDS.
+As páginas estarão agrupadas dentro do fluxo de processos.
 
 ### Recursos principais:
 - 📊 Visualização de dados
@@ -53,14 +53,6 @@ st.header("Exemplo de Conteúdo")
 
 col1, col2, col3 = st.columns(3)
 
-with col1:
-    st.metric("Métrica 1", "100", "+10%")
-
-with col2:
-    st.metric("Métrica 2", "250", "-5%")
-
-with col3:
-    st.metric("Métrica 3", "75", "+20%")
 
 # Sidebar
 st.sidebar.header("⚙️ Configurações")
@@ -81,6 +73,6 @@ st.sidebar.divider()
 st.sidebar.header("📑 Menu")
 st.sidebar.markdown("""
 - [Home](/)
-- [Página 1 - Torre de Controle](pages/03_sac7.py)
+- [Página 1 - Torre de Controle](03_sac7.py)
 - 
 """)
