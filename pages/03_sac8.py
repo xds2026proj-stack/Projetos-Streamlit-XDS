@@ -27,13 +27,18 @@ RESPONSABILIDADE_PADRAO = {
 
 COLUNAS_OPERACIONAIS = [
     "Carga",
-    "NF",
-    "Cliente_XDS",
-    "Motorista",
-    "Status",
-    "Ocorrência",
-    "Responsavel_Ocorrencia",
-    "Observações",
+        "NF",
+        "Cliente_XDS",
+        "Motorista",
+        "Status",
+        "Ocorrência",
+        "Responsavel_Ocorrencia",
+        "Observações",
+        "Local",
+        "Periodo de entrega",
+        "Nome do Recebedor",
+        "CEP", "Bairro",
+        "Custo Diesel",
 ]
 
 COLUNAS_FINANCEIRAS = [
