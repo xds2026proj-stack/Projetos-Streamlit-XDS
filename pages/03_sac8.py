@@ -28,6 +28,7 @@ RESPONSABILIDADE_PADRAO = {
 COLUNAS_OPERACIONAIS = [
     "Carga",
         "NF",
+        "Ordem de Venda",
         "Cliente_XDS",
         "Motorista",
         "Status",
