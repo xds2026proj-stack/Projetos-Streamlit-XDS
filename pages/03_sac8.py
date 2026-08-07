@@ -307,7 +307,7 @@ else:
         for c in df_raw.columns
         if c
         in COLUNAS_OPERACIONAIS
-        + ["Adicional_Receber", "Adicional_Pagar", "Data_Envio"] + COLUNAS_AUDITORIA_LINHA
+        + ["Ordem de Venda","Adicional_Receber", "Adicional_Pagar", "Data_Envio"] + COLUNAS_AUDITORIA_LINHA
     ]
 
 # -----------------------------------------------------------------------------
